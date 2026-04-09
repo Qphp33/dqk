@@ -1,0 +1,6 @@
+node_modules
+release/*.exe
+release/win-unpacked/
+*.exe
+*.dll
+dist/
