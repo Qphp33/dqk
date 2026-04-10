@@ -4,6 +4,7 @@ import {
   Bot,
   CloudOff,
   Database,
+  Edit3,
   Home,
   ListTodo,
   LogOut,
@@ -76,6 +77,65 @@ const formatNetworkLoad = (value) => {
 const formatCount = (value) => {
   const num = Number(value) || 0;
   return num.toLocaleString('zh-CN');
+};
+
+const NODE_API_KEYS = [
+  'fofa.keys',
+  'shodan.keys',
+  'securitytrails.keys',
+  'dnsdumpster.keys'
+];
+
+const getDeepValue = (source, path) => {
+  if (!source || typeof source !== 'object') return undefined;
+  if (Object.prototype.hasOwnProperty.call(source, path)) return source[path];
+  return String(path || '').split('.').reduce((acc, key) => {
+    if (acc && typeof acc === 'object' && Object.prototype.hasOwnProperty.call(acc, key)) {
+      return acc[key];
+    }
+    return undefined;
+  }, source);
+};
+
+const normalizeNodeApiValues = (value) => {
+  if (Array.isArray(value)) {
+    return value.map(item => String(item ?? '').trim()).filter(Boolean);
+  }
+  if (typeof value === 'string') {
+    return value.split(',').map(item => item.trim()).filter(Boolean);
+  }
+  if (value === null || value === undefined) {
+    return [];
+  }
+  return [String(value).trim()].filter(Boolean);
+};
+
+const normalizeNodeApiRows = (payload) => {
+  const rows = normalizeNodeRows(payload);
+  return rows.map((row, index) => {
+    const configSource = row?.config && typeof row.config === 'object' ? row.config : row;
+    const url = String(
+      row?.url ||
+      row?.nodeUrl ||
+      row?.node_url ||
+      row?.baseUrl ||
+      row?.base_url ||
+      row?.node_ip ||
+      row?.ip ||
+      ''
+    ).trim();
+
+    return {
+      id: row?.id || row?.node_id || row?.nodeId || row?.node_ip || row?.ip || `node-${index + 1}`,
+      name: String(row?.name || row?.nodeName || row?.node_name || row?.node_id || `节点 ${index + 1}`),
+      url,
+      raw: row,
+      items: NODE_API_KEYS.map((key) => ({
+        key,
+        values: normalizeNodeApiValues(getDeepValue(configSource, key))
+      }))
+    };
+  });
 };
 
 const isTextInput = (element) => {
@@ -302,10 +362,17 @@ function App() {
   const [nodeTab, setNodeTab] = useState('status');
   const [nodeStatusLoading, setNodeStatusLoading] = useState(false);
   const [nodeSaving, setNodeSaving] = useState(false);
+  const [nodeApiLoading, setNodeApiLoading] = useState(false);
+  const [nodeApiSyncing, setNodeApiSyncing] = useState(false);
+  const [nodeApiSaving, setNodeApiSaving] = useState(false);
   const [nodeStatusError, setNodeStatusError] = useState('');
   const [nodeConfigError, setNodeConfigError] = useState('');
+  const [nodeApiError, setNodeApiError] = useState('');
   const [scanNodes, setScanNodes] = useState([]);
+  const [nodeApiNodes, setNodeApiNodes] = useState([]);
   const [nodeConfig, setNodeConfig] = useState(defaultNodeConfig);
+  const [editingNodeApi, setEditingNodeApi] = useState(null);
+  const [editingNodeApiValue, setEditingNodeApiValue] = useState('');
   const nodeModalOpenedAtRef = useRef(0);
   const hasAutoSyncedRef = useRef(false);
   const contextMenuTargetRef = useRef(null);
@@ -615,12 +682,95 @@ function App() {
     }
   };
 
+  const loadNodeApiConfigs = async () => {
+    if (!canUseRemoteFeatures) return;
+    setNodeApiLoading(true);
+    setNodeApiError('');
+    try {
+      const token = localStorage.getItem('token');
+      const res = await ipcRenderer.invoke('get-all-node-api-configs', { token });
+      if (!res?.success) {
+        throw new Error(res?.error || '获取节点 API 配置失败');
+      }
+      setNodeApiNodes(normalizeNodeApiRows(res.data));
+    } catch (err) {
+      console.error('[App] loadNodeApiConfigs failed =', err);
+      setNodeApiError(err?.message || '获取节点 API 配置失败');
+      setNodeApiNodes([]);
+    } finally {
+      setNodeApiLoading(false);
+    }
+  };
+
+  const handleSyncAllNodeKeys = async () => {
+    if (!canUseRemoteFeatures) return;
+    setNodeApiSyncing(true);
+    setNodeApiError('');
+    try {
+      const token = localStorage.getItem('token');
+      const res = await ipcRenderer.invoke('sync-all-node-keys', { token });
+      if (!res?.success) {
+        throw new Error(res?.error || '同步所有节点失败');
+      }
+      await loadNodeApiConfigs();
+    } catch (err) {
+      console.error('[App] handleSyncAllNodeKeys failed =', err);
+      setNodeApiError(err?.message || '同步所有节点失败');
+    } finally {
+      setNodeApiSyncing(false);
+    }
+  };
+
+  const startEditNodeApi = (node, item) => {
+    setEditingNodeApi({
+      nodeId: node.id,
+      url: node.url,
+      key: item.key
+    });
+    setEditingNodeApiValue((item.values || []).join(','));
+  };
+
+  const cancelEditNodeApi = () => {
+    setEditingNodeApi(null);
+    setEditingNodeApiValue('');
+  };
+
+  const saveNodeApiValue = async () => {
+    if (!editingNodeApi?.url || !editingNodeApi?.key) return;
+    setNodeApiSaving(true);
+    setNodeApiError('');
+    try {
+      const token = localStorage.getItem('token');
+      const payload = {
+        url: editingNodeApi.url,
+        key: editingNodeApi.key,
+        value: editingNodeApiValue
+          .split(',')
+          .map(item => item.trim())
+          .filter(Boolean)
+      };
+      const res = await ipcRenderer.invoke('set-node-key', { token, payload });
+      if (!res?.success) {
+        throw new Error(res?.error || '保存节点 API 失败');
+      }
+      await loadNodeApiConfigs();
+      cancelEditNodeApi();
+    } catch (err) {
+      console.error('[App] saveNodeApiValue failed =', err);
+      setNodeApiError(err?.message || '保存节点 API 失败');
+    } finally {
+      setNodeApiSaving(false);
+    }
+  };
+
   const openNodeModal = async () => {
     nodeModalOpenedAtRef.current = Date.now();
     setShowNodeModal(true);
     setNodeTab(canUseRemoteFeatures ? 'status' : 'config');
     setNodeStatusError('');
     setNodeConfigError('');
+    setNodeApiError('');
+    cancelEditNodeApi();
     try {
       await loadNodeConfig();
       if (canUseRemoteFeatures) {
@@ -633,8 +783,15 @@ function App() {
   };
 
   const closeNodeModal = () => {
+    cancelEditNodeApi();
     setShowNodeModal(false);
   };
+
+  useEffect(() => {
+    if (!showNodeModal || nodeTab !== 'api' || !canUseRemoteFeatures) return;
+    if (nodeApiLoading || nodeApiNodes.length > 0) return;
+    loadNodeApiConfigs();
+  }, [showNodeModal, nodeTab, canUseRemoteFeatures]);
 
   const handleNodeOverlayMouseDown = (e) => {
     if (e.target !== e.currentTarget) return;

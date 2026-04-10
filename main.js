@@ -209,6 +209,82 @@ async function checkNodeOnline(nodeUrl) {
   }
 }
 
+function unwrapBackendPayload(response) {
+  const data = response?.data || {};
+  return data?.data ?? data?.rows ?? data?.list ?? data?.result ?? data;
+}
+
+async function getAllNodeApiConfigs(token) {
+  try {
+    const response = await backendRequest('/module/project/getAllNodes', {
+      method: 'GET',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Accept': 'application/json'
+      }
+    });
+    const data = response?.data || {};
+    if (data.code === 200 || response?.status === 200) {
+      return {
+        success: true,
+        data: unwrapBackendPayload(response),
+        message: data.msg || data.message || ''
+      };
+    }
+    return { success: false, error: data.msg || data.message || '获取节点 API 配置失败' };
+  } catch (e) {
+    return { success: false, error: e.message || '获取节点 API 配置失败' };
+  }
+}
+
+async function syncAllNodeKeys(token) {
+  try {
+    const response = await backendRequest('/module/project/SyncNodeKey', {
+      method: 'GET',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Accept': 'application/json'
+      }
+    });
+    const data = response?.data || {};
+    if (data.code === 200 || response?.status === 200) {
+      return {
+        success: true,
+        data: unwrapBackendPayload(response),
+        message: data.msg || data.message || '同步完成'
+      };
+    }
+    return { success: false, error: data.msg || data.message || '同步所有节点失败' };
+  } catch (e) {
+    return { success: false, error: e.message || '同步所有节点失败' };
+  }
+}
+
+async function updateSingleNodeKey(token, payload) {
+  try {
+    const response = await backendRequest('/module/project/setNodeKey', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json',
+        'Accept': 'application/json'
+      },
+      body: JSON.stringify(payload || {})
+    });
+    const data = response?.data || {};
+    if (data.code === 200 || response?.status === 200) {
+      return {
+        success: true,
+        data: unwrapBackendPayload(response),
+        message: data.msg || data.message || '保存成功'
+      };
+    }
+    return { success: false, error: data.msg || data.message || '更新节点 API 失败' };
+  } catch (e) {
+    return { success: false, error: e.message || '更新节点 API 失败' };
+  }
+}
+
 async function checkBackendOnline() {
   const maxAttempts = 3;
   let lastError = null;
@@ -2815,6 +2891,18 @@ function createWindow() {
     } catch (e) {
       return { success: false, online: false, error: e.message || '节点探测失败' };
     }
+  });
+
+  ipcMain.handle('get-all-node-api-configs', async (event, { token }) => {
+    return await getAllNodeApiConfigs(token);
+  });
+
+  ipcMain.handle('sync-all-node-keys', async (event, { token }) => {
+    return await syncAllNodeKeys(token);
+  });
+
+  ipcMain.handle('set-node-key', async (event, { token, payload }) => {
+    return await updateSingleNodeKey(token, payload);
   });
 
   ipcMain.handle('check-backend-online', async () => {
